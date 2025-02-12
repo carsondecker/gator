@@ -1,27 +1,45 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"log"
+	"os"
 
 	"github.com/carsondecker/gator/internal/config"
 )
 
+type state struct {
+	config *config.Config
+}
+
 func main() {
 	cfg, err := config.Read()
-	if err != nil {
-		log.Fatal(err)
+	handleError(err)
+
+	state := &state{
+		config: &cfg,
 	}
 
-	err = cfg.SetUser("carson")
-	if err != nil {
-		log.Fatal(err)
+	commands, err := initCommands()
+	handleError(err)
+
+	args := os.Args
+	if len(args) < 2 {
+		handleError(errors.New("command name required"))
 	}
 
-	cfg, err = config.Read()
-	if err != nil {
-		log.Fatal(err)
+	command := command{
+		name: args[1],
+		args: args[2:],
 	}
 
-	fmt.Printf("Database URL: %s, Current User: %s\n", cfg.DbURL, cfg.CurrentUserName)
+	err = commands.run(state, command)
+	handleError(err)
+}
+
+func handleError(err error) {
+	if err != nil {
+		fmt.Printf("error: %v\n", err)
+		os.Exit(1)
+	}
 }
