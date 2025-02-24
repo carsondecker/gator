@@ -49,6 +49,16 @@ func initCommands() (*commands, error) {
 		return nil, err
 	}
 
+	err = cmds.register("addfeed", handlerAddFeed)
+	if err != nil {
+		return nil, err
+	}
+
+	err = cmds.register("feeds", handlerFeeds)
+	if err != nil {
+		return nil, err
+	}
+
 	return cmds, nil
 }
 
@@ -147,5 +157,46 @@ func handlerAgg(s *state, cmd command) error {
 		return err
 	}
 	fmt.Println(feed)
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return errors.New("addfeed command requires name and url arguments")
+	}
+
+	currentUser, err := s.db.GetUser(context.Background(), s.config.CurrentUserName)
+	if err != nil {
+		return err
+	}
+
+	createdFeed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID:        uuid.New(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Name:      cmd.args[0],
+		Url:       cmd.args[1],
+		UserID:    currentUser.ID,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("feed %s created with url %s for user %s\n", createdFeed.Name, createdFeed.Url, createdFeed.UserID)
+
+	return nil
+}
+
+func handlerFeeds(s *state, cmd command) error {
+	feeds, err := s.db.GetFeedsWithUser(context.Background())
+	if err != nil {
+		return err
+	}
+
+	for _, feed := range feeds {
+		fmt.Printf("feed %s with url %s for user %s", feed.Name, feed.Url, feed.Username)
+	}
+
 	return nil
 }
