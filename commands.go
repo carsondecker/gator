@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/carsondecker/gator/internal/database"
@@ -49,7 +50,7 @@ func initCommands() (*commands, error) {
 		return nil, err
 	}
 
-	err = cmds.register("addfeed", handlerAddFeed)
+	err = cmds.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	if err != nil {
 		return nil, err
 	}
@@ -59,12 +60,22 @@ func initCommands() (*commands, error) {
 		return nil, err
 	}
 
-	err = cmds.register("follow", handlerFollow)
+	err = cmds.register("follow", middlewareLoggedIn(handlerFollow))
 	if err != nil {
 		return nil, err
 	}
 
 	err = cmds.register("following", handlerFollowing)
+	if err != nil {
+		return nil, err
+	}
+
+	err = cmds.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	if err != nil {
+		return nil, err
+	}
+
+	err = cmds.register("browse", middlewareLoggedIn(handlerBrowse))
 	if err != nil {
 		return nil, err
 	}
@@ -162,22 +173,25 @@ func handlerUsers(s *state, cmd command) error {
 }
 
 func handlerAgg(s *state, cmd command) error {
-	feed, err := fetchFeed(context.Background(), "https://www.wagslane.dev/index.xml")
-	if err != nil {
-		return err
+	if len(cmd.args) < 1 {
+		return errors.New("agg command requires time between requests argument")
 	}
-	fmt.Println(feed)
-	return nil
+
+	time_between_reqs, err := time.ParseDuration(cmd.args[0])
+	if err != nil {
+		return errors.New("could not parse entered duration")
+	}
+
+	if time_between_reqs < time.Second*10 {
+		return errors.New("agg command requires at least 10s between requests")
+	}
+
+	return scrapeFeeds(s, time_between_reqs)
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return errors.New("addfeed command requires name and url arguments")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.config.CurrentUserName)
-	if err != nil {
-		return err
 	}
 
 	feed, err := s.db.CreateFeed(context.Background(), database.CreateFeedParams{
@@ -193,7 +207,7 @@ func handlerAddFeed(s *state, cmd command) error {
 		return err
 	}
 
-	fmt.Printf("feed %s created with url %s for user %s\n", feed.Name, feed.Url, feed.UserID)
+	fmt.Printf("feed %s created with url %s for user %s\n", feed.Name, feed.Url, user.Name)
 
 	_, err = s.db.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
 		ID:        uuid.New(),
@@ -217,20 +231,15 @@ func handlerFeeds(s *state, cmd command) error {
 	}
 
 	for _, feed := range feeds {
-		fmt.Printf("feed %s with url %s for user %s", feed.Name, feed.Url, feed.UserName)
+		fmt.Printf("feed %s with url %s for user %s\n", feed.Name, feed.Url, feed.UserName)
 	}
 
 	return nil
 }
 
-func handlerFollow(s *state, cmd command) error {
+func handlerFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 1 {
 		return errors.New("follow command requires url argument")
-	}
-
-	user, err := s.db.GetUser(context.Background(), s.config.CurrentUserName)
-	if err != nil {
-		return err
 	}
 
 	feed, err := s.db.GetFeedByUrl(context.Background(), cmd.args[0])
@@ -266,4 +275,63 @@ func handlerFollowing(s *state, cmd command) error {
 	}
 
 	return nil
+}
+
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) < 1 {
+		return errors.New("unfollow command requires url argument")
+	}
+
+	feed, err := s.db.GetFeedByUrl(context.Background(), cmd.args[0])
+	if err != nil {
+		return err
+	}
+
+	err = s.db.UnfollowFeedForUser(context.Background(), database.UnfollowFeedForUserParams{
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("unfollowed feed with url %s for user %s", cmd.args[0], user.Name)
+	return nil
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	browseLimit := 2
+	if len(cmd.args) != 0 {
+		var err error
+		browseLimit, err = strconv.Atoi(cmd.args[0])
+		if err != nil {
+			return err
+		}
+	}
+
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(browseLimit),
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, post := range posts {
+		fmt.Println(post.Title)
+	}
+
+	return nil
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		user, err := s.db.GetUser(context.Background(), s.config.CurrentUserName)
+		if err != nil {
+			return err
+		}
+
+		return handler(s, cmd, user)
+	}
 }
